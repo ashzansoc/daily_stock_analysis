@@ -692,6 +692,17 @@ def stabilize_decision_with_structure(
                     resistance=resistance,
                     flow_bias=flow_bias,
                 )
+            elif mid_range and flow_bias == "neutral":
+                _downgrade_to_structural_hold(
+                    result,
+                    language,
+                    advice_key="range",
+                    reason_key="hold_mid_range",
+                    current_price=current_price,
+                    support=support,
+                    resistance=resistance,
+                    flow_bias=flow_bias,
+                )
         elif decision_type == "sell":
             if near_support and flow_bias != "outflow":
                 _downgrade_to_structural_hold(

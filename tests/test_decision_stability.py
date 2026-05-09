@@ -74,6 +74,26 @@ def test_downgrades_buy_near_resistance_without_fund_confirmation() -> None:
     assert result.dashboard["core_conclusion"]["signal_type"] == "🟡持有观望"
 
 
+def test_downgrades_buy_mid_range_with_neutral_fund_flow() -> None:
+    result = _result(
+        decision_type="buy",
+        operation_advice="买入",
+        score=66,
+        current_price=32.0,
+    )
+
+    stabilize_decision_with_structure(
+        result,
+        SimpleNamespace(support_levels=[30.0], resistance_levels=[34.0]),
+        _fund_flow(main=0, five_day=0, ten_day=0),
+    )
+
+    assert result.decision_type == "hold"
+    assert result.sentiment_score <= 59
+    assert result.operation_advice == "震荡观望"
+    assert "资金流不明确" in result.risk_warning
+
+
 def test_downgrades_sell_near_support_without_sustained_outflow() -> None:
     result = _result(
         decision_type="sell",
