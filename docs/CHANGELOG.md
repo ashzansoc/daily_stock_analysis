@@ -29,7 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [新功能] 告警中心 P4 记录真实通知尝试结果，并为持久化规则新增可查询的业务冷却状态。
 - [新功能] 告警中心 P5 支持 MA、RSI、MACD、KDJ、CCI 日线技术指标规则，并复用现有触发历史、通知结果和持久化冷却链路。
 - [文档] 通知分阶段治理文档已收口为 `#1311` 议题分片范围，阶段性 PR 需使用 `Refs #1311` 追踪，不得用 `Closes`/`Fixes`/`Resolves` 自动关闭 umbrella。
-- [文档] 补齐 `docs/notifications.md` 与 `docs/full-guide*.md` 中的通知能力基线、渠道能力矩阵和 PR 描述交付清单（含 `./scripts/ci_gate.sh`、`python main.py --check-notify`、`tests/test_notification_diagnostics.py` 与 `tests/test_feishu_doc.py`）。
+- [文档] 补齐 `docs/notifications.md` 与 `docs/full-guide*.md` 中的通知能力基线、渠道能力矩阵和 PR 描述交付清单（含 `backend-gate`、`./scripts/ci_gate.sh`、`python main.py --check-notify`、`tests/test_notification_diagnostics.py` 与 `tests/test_feishu_doc.py`）。
 - [文档] 明确报告投递体验边界：IM/Push 渠道以摘要+入口为主、完整研报优先 `report_url` / `external_doc_url` / HTML，避免敏感链接和完整正文误入默认通道。
 
 ## [3.17.1] - 2026-05-16
