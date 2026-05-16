@@ -1811,6 +1811,7 @@ class GeminiAnalyzer:
         self._use_legacy_default_prompt_override = use_legacy_default_prompt
         self._resolved_prompt_state: Optional[Dict[str, Any]] = None
         self._router = None
+        self._legacy_router_model_list: List[Dict[str, Any]] = []
         self._litellm_available = False
         self._init_litellm()
         if not self._litellm_available:
@@ -1953,6 +1954,7 @@ class GeminiAnalyzer:
                 }
                 for k in keys
             ]
+            self._legacy_router_model_list = legacy_model_list
             self._router = Router(
                 model_list=legacy_model_list,
                 routing_strategy="simple-shuffle",
@@ -2207,6 +2209,10 @@ class GeminiAnalyzer:
         effective_system_prompt = system_prompt or self.TEXT_SYSTEM_PROMPT
         router_model_names = set(get_configured_llm_models(config.llm_model_list))
         for model in models_to_try:
+            recovery_model_list = config.llm_model_list
+            if self._router and model == config.litellm_model and not use_channel_router:
+                recovery_model_list = self._legacy_router_model_list or config.llm_model_list
+
             try:
                 model_short = model.split("/")[-1] if "/" in model else model
                 extra = get_thinking_extra_body(model_short)
@@ -2239,7 +2245,7 @@ class GeminiAnalyzer:
                     call_kwargs,
                     model,
                     requested_temperature,
-                    model_list=config.llm_model_list,
+                    model_list=recovery_model_list,
                 )
 
                 _stream_text: Optional[str] = None
@@ -2257,7 +2263,7 @@ class GeminiAnalyzer:
                             ),
                             model=model,
                             call_kwargs={**call_kwargs, "stream": True},
-                            model_list=config.llm_model_list,
+                            model_list=recovery_model_list,
                             cache_recovery=False,
                             logger=logger,
                         )
@@ -2305,7 +2311,7 @@ class GeminiAnalyzer:
                     ),
                     model=model,
                     call_kwargs=call_kwargs,
-                    model_list=config.llm_model_list,
+                    model_list=recovery_model_list,
                     logger=logger,
                 )
 

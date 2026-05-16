@@ -142,6 +142,58 @@ class TestAnalyzerGenerateText:
         assert usage == {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3}
         assert progress_updates == [3, 6]
 
+    def test_call_litellm_legacy_path_uses_legacy_model_list_for_param_recovery(self):
+        with patch("src.analyzer.get_config") as mock_cfg:
+            cfg = MagicMock()
+            cfg.litellm_model = "openai/gpt-4o-mini"
+            cfg.litellm_fallback_models = []
+            cfg.gemini_api_keys = []
+            cfg.anthropic_api_keys = []
+            cfg.deepseek_api_keys = []
+            cfg.openai_api_keys = ["sk-openai-legacy-a", "sk-openai-legacy-b"]
+            cfg.openai_base_url = "https://strict.example/v1"
+            cfg.llm_model_list = [
+                {
+                    "model_name": "__legacy_openai__",
+                    "litellm_params": {
+                        "model": "__legacy_openai__",
+                        "api_key": "sk-openai-legacy-a",
+                    },
+                },
+                {
+                    "model_name": "__legacy_openai__",
+                    "litellm_params": {
+                        "model": "__legacy_openai__",
+                        "api_key": "sk-openai-legacy-b",
+                    },
+                },
+            ]
+            cfg.llm_temperature = 0.7
+            mock_cfg.return_value = cfg
+
+            from src.analyzer import GeminiAnalyzer
+
+            analyzer = GeminiAnalyzer()
+            analyzer._config_override = cfg
+
+        captured = {}
+
+        def _fake_call_litellm_with_param_recovery(call, **kwargs):
+            captured["model_list"] = kwargs.get("model_list")
+            return SimpleNamespace(
+                choices=[SimpleNamespace(message=SimpleNamespace(content="ok"))],
+                usage=None,
+            )
+
+        with patch("src.analyzer.call_litellm_with_param_recovery", side_effect=_fake_call_litellm_with_param_recovery):
+            text, _, _ = analyzer._call_litellm("回归用例", {"max_tokens": 128, "temperature": 0.7})
+
+        assert text == "ok"
+        passed_model_list = captured.get("model_list")
+        assert passed_model_list is not None
+        assert len(passed_model_list) == 2
+        assert all(item["litellm_params"].get("model") == "openai/gpt-4o-mini" for item in passed_model_list)
+
     def test_call_litellm_stream_falls_back_to_non_stream_before_first_chunk(self):
         analyzer = self._make_analyzer()
         analyzer._config_override = SimpleNamespace(
