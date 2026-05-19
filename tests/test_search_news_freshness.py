@@ -337,6 +337,55 @@ class SearchNewsFreshnessTestCase(unittest.TestCase):
         p1.search.assert_called_once()
         p2.search.assert_called_once()
 
+    def test_a_share_chinese_direct_news_beats_english_direct_provider_fallback(self) -> None:
+        """Chinese-preferred queries should keep looking past English-only direct hits."""
+        fresh = datetime.now().date().isoformat()
+        service = SearchService(
+            bocha_keys=["dummy_key"],
+            searxng_public_instances_enabled=False,
+            news_max_age_days=3,
+            news_strategy_profile="short",
+        )
+
+        p1 = SimpleNamespace(
+            is_available=True,
+            name="EnglishDirect",
+            search=MagicMock(
+                return_value=_response(
+                    [
+                        _result(
+                            "Kweichow Moutai 600519 announces buyback",
+                            fresh,
+                            snippet="The company reported an updated share repurchase plan.",
+                        )
+                    ]
+                )
+            ),
+        )
+        p2 = SimpleNamespace(
+            is_available=True,
+            name="ChineseDirect",
+            search=MagicMock(
+                return_value=_response(
+                    [
+                        _result(
+                            "贵州茅台 600519 发布回购公告",
+                            fresh,
+                            snippet="贵州茅台披露公司回购公告。",
+                        )
+                    ]
+                )
+            ),
+        )
+        service._providers = [p1, p2]
+
+        resp = service.search_stock_news("600519", "贵州茅台", max_results=1)
+
+        self.assertEqual(resp.results[0].title, "贵州茅台 600519 发布回购公告")
+        self.assertEqual(resp.results[0].relevance_category, "direct_company_news")
+        p1.search.assert_called_once()
+        p2.search.assert_called_once()
+
     def test_hk_stock_relevance_avoids_similar_name_noise(self) -> None:
         """HK stock matching should prefer exact company/code over similar-name news."""
         fresh = datetime.now().date().isoformat()
@@ -411,6 +460,54 @@ class SearchNewsFreshnessTestCase(unittest.TestCase):
         self.assertEqual(resp.results[0].title, "AAPL Apple earnings beat analyst expectations")
         self.assertEqual(resp.results[0].relevance_category, "direct_company_news")
         self.assertEqual(resp.results[1].relevance_category, "sector_related_news")
+
+    def test_one_letter_us_ticker_does_not_match_common_article_words(self) -> None:
+        """Bare one-letter US tickers should not make ordinary words direct hits."""
+        fresh = datetime.now().date().isoformat()
+        service = SearchService(
+            bocha_keys=["dummy_key"],
+            searxng_public_instances_enabled=False,
+            news_max_age_days=3,
+            news_strategy_profile="short",
+        )
+        p1 = SimpleNamespace(
+            is_available=True,
+            name="GenericProvider",
+            search=MagicMock(
+                return_value=_response(
+                    [
+                        _result(
+                            "A new investing playbook emerges",
+                            fresh,
+                            snippet="Markets weigh a broad macro update.",
+                        )
+                    ]
+                )
+            ),
+        )
+        p2 = SimpleNamespace(
+            is_available=True,
+            name="CompanyProvider",
+            search=MagicMock(
+                return_value=_response(
+                    [
+                        _result(
+                            "Agilent Technologies announces quarterly earnings",
+                            fresh,
+                            snippet="Agilent Technologies revenue guidance improved.",
+                        )
+                    ]
+                )
+            ),
+        )
+        service._providers = [p1, p2]
+
+        resp = service.search_stock_news("A", "Agilent Technologies", max_results=1)
+
+        self.assertEqual(resp.results[0].title, "Agilent Technologies announces quarterly earnings")
+        self.assertEqual(resp.results[0].relevance_category, "direct_company_news")
+        p1.search.assert_called_once()
+        p2.search.assert_called_once()
 
     def test_ambiguous_english_name_generic_event_does_not_stop_provider_fallback(self) -> None:
         """Ambiguous title-only names plus broad event words should not count as direct hits."""

@@ -2504,8 +2504,11 @@ class SearchService:
             return []
 
         terms: List[str] = []
-        cls._append_unique(terms, raw)
-        cls._append_unique(terms, raw.upper())
+        upper = raw.upper()
+        is_one_letter_us_ticker = bool(len(upper) == 1 and cls._US_STOCK_RE.match(upper))
+        if not is_one_letter_us_ticker:
+            cls._append_unique(terms, raw)
+            cls._append_unique(terms, upper)
 
         lower = raw.lower()
         hk_digits = ""
@@ -2530,7 +2533,6 @@ class SearchService:
             cls._append_unique(terms, f"{raw}{suffix}")
             return terms
 
-        upper = raw.upper()
         if cls._US_STOCK_RE.match(upper):
             cls._append_unique(terms, f"${upper}")
             cls._append_unique(terms, f"NASDAQ:{upper}")
@@ -2802,6 +2804,15 @@ class SearchService:
             "direct_count": sum(
                 1 for item in results if item.relevance_category == cls._DIRECT_NEWS_CATEGORY
             ),
+            "preferred_direct_count": sum(
+                1
+                for item in results
+                if (
+                    prefer_chinese
+                    and item.relevance_category == cls._DIRECT_NEWS_CATEGORY
+                    and cls._is_chinese_news_result(item)
+                )
+            ),
             "preferred_count": sum(
                 1 for item in results if prefer_chinese and cls._is_chinese_news_result(item)
             ),
@@ -2821,9 +2832,15 @@ class SearchService:
     ) -> bool:
         if best_response is None or best_stats is None:
             return True
-        for key in ("direct_count", "max_score"):
-            if candidate_stats[key] != best_stats[key]:
-                return candidate_stats[key] > best_stats[key]
+        if candidate_stats["direct_count"] != best_stats["direct_count"]:
+            return candidate_stats["direct_count"] > best_stats["direct_count"]
+        if (
+            prefer_chinese
+            and candidate_stats["preferred_direct_count"] != best_stats["preferred_direct_count"]
+        ):
+            return candidate_stats["preferred_direct_count"] > best_stats["preferred_direct_count"]
+        if candidate_stats["max_score"] != best_stats["max_score"]:
+            return candidate_stats["max_score"] > best_stats["max_score"]
         if prefer_chinese and candidate_stats["preferred_count"] != best_stats["preferred_count"]:
             return candidate_stats["preferred_count"] > best_stats["preferred_count"]
         return candidate_stats["result_count"] > best_stats["result_count"]
@@ -3242,7 +3259,9 @@ class SearchService:
                         best_ranked_response = limited_response
                         best_ranked_stats = stats
 
-                    if stats["direct_count"] > 0:
+                    if stats["direct_count"] > 0 and (
+                        not prefer_chinese or stats["preferred_direct_count"] > 0
+                    ):
                         logger.info(
                             "%s 搜索成功，识别到 %s 条直接个股新闻，优先返回",
                             provider.name,
@@ -3250,6 +3269,14 @@ class SearchService:
                         )
                         self._put_cache(cache_key, limited_response)
                         return limited_response
+
+                    if prefer_chinese and stats["direct_count"] > 0:
+                        logger.info(
+                            "%s 搜索成功，识别到 %s 条直接个股新闻但缺少中文直接命中，继续尝试下一引擎",
+                            provider.name,
+                            stats["direct_count"],
+                        )
+                        continue
 
                     if prefer_chinese and stats["preferred_count"] >= max_results:
                         logger.info(
