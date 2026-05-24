@@ -253,6 +253,17 @@ class PytdxFetcher(BaseFetcher):
         """
         raw_code = stock_code.strip()
         upper = raw_code.upper()
+        prefix, separator, suffix = raw_code.partition(".")
+        if separator and prefix:
+            prefix_upper = prefix.strip().upper()
+            if prefix_upper in ('SH', 'SS'):
+                normalized = normalize_stock_code(suffix.strip())
+                if normalized.isdigit() and len(normalized) == 6:
+                    return 1, normalized
+            if prefix_upper == 'SZ':
+                normalized = normalize_stock_code(suffix.strip())
+                if normalized.isdigit() and len(normalized) == 6:
+                    return 0, normalized
 
         code = normalize_stock_code(raw_code)
 
