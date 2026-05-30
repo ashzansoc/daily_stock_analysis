@@ -1935,6 +1935,23 @@ class SystemConfigService:
         return canonical is not None and host.lower() != canonical
 
     @staticmethod
+    def _normalize_hostname_for_security(host: str) -> Optional[str]:
+        """Return a normalized ASCII host for URL safety checks."""
+        import unicodedata
+
+        candidate = (host or "").strip().lower().rstrip(".")
+        if not candidate:
+            return None
+        if ":" in candidate:
+            return candidate
+        try:
+            normalized = unicodedata.normalize("NFKC", candidate)
+            ascii_host = normalized.encode("idna").decode("ascii").lower().rstrip(".")
+        except UnicodeError:
+            return None
+        return ascii_host or None
+
+    @staticmethod
     def _is_valid_llm_base_url(value: str, allowed_schemes: Tuple[str, ...] = ("http", "https")) -> bool:
         """Return True when an LLM base URL is safe to parse consistently."""
         if not value:
@@ -2760,11 +2777,14 @@ class SystemConfigService:
 
         try:
             parsed = urlparse(value)
-            host = (parsed.hostname or "").lower()
+            raw_host = parsed.hostname or ""
         except ValueError:
             return False
-        if not host:
+        if not raw_host:
             return True
+        host = SystemConfigService._normalize_hostname_for_security(raw_host)
+        if not host:
+            return False
         # Known cloud metadata hostnames
         _BLOCKED_HOSTS = frozenset({
             "169.254.169.254",

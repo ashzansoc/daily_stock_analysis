@@ -662,6 +662,19 @@ class LLMChannelConfigTestCase(unittest.TestCase):
                 self.assertFalse(SystemConfigService._is_valid_llm_base_url(value))
                 self.assertFalse(SystemConfigService._is_safe_base_url(value))
 
+    def test_llm_base_url_blocks_unicode_idna_metadata_aliases(self) -> None:
+        restricted_urls = [
+            "http://169。254。169。254/v1",
+            "http://①⑥⑨.254.169.254/v1",
+            "http://metadata。google。internal/v1",
+            "http://ｍetadata.google.internal/v1",
+        ]
+
+        for value in restricted_urls:
+            with self.subTest(value=value):
+                self.assertTrue(SystemConfigService._is_valid_llm_base_url(value))
+                self.assertFalse(SystemConfigService._is_safe_base_url(value))
+
     def test_llm_base_url_accepts_common_openai_compatible_and_local_shapes(self) -> None:
         valid_urls = [
             "https://api.openai.com/v1",
@@ -692,6 +705,27 @@ class LLMChannelConfigTestCase(unittest.TestCase):
         self.assertEqual(payload["error_code"], "invalid_config")
         self.assertEqual(payload["details"]["reason"], "invalid_url")
         mock_get.assert_not_called()
+
+    @patch("src.services.system_config_service.requests.get")
+    def test_discover_llm_channel_models_blocks_unicode_metadata_alias(self, mock_get) -> None:
+        service = SystemConfigService(manager=Mock())
+
+        for value in (
+            "http://169。254。169。254/v1",
+            "http://①⑥⑨.254.169.254/v1",
+        ):
+            with self.subTest(value=value):
+                payload = service.discover_llm_channel_models(
+                    name="primary",
+                    protocol="openai",
+                    base_url=value,
+                    api_key="sk-test-value",
+                )
+
+                self.assertFalse(payload["success"])
+                self.assertEqual(payload["error_code"], "invalid_config")
+                self.assertEqual(payload["details"]["reason"], "ssrf_blocked")
+                mock_get.assert_not_called()
 
     @patch("src.services.system_config_service.requests.get")
     def test_discover_llm_channel_models_blocks_numeric_metadata_alias(self, mock_get) -> None:
