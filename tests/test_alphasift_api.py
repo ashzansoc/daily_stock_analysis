@@ -305,7 +305,7 @@ class AlphaSiftOpportunitiesApiTestCase(unittest.TestCase):
         fake_module.screen.assert_called_once_with(
             "dual_low",
             market="cn",
-            max_output=5,
+            max_results=5,
             use_llm=False,
         )
         self.assertEqual(payload["candidate_count"], 1)
@@ -314,20 +314,45 @@ class AlphaSiftOpportunitiesApiTestCase(unittest.TestCase):
         self.assertIsNone(payload["candidates"][0]["raw"]["nested"]["pe"])
         self.assertIsNone(payload["candidates"][0]["raw"]["nested"]["pb"])
 
-    def test_screen_rejects_unknown_strategy(self) -> None:
+    def test_screen_allows_non_listed_strategy_as_custom(self) -> None:
         config = self._config(enabled=True)
         fake_module = _make_adapter_module(
             list_strategies=lambda: [{"id": "dual_low", "title": "双低选股"}],
             get_status=lambda: {"supported_markets": ["cn"]},
-            screen=MagicMock(return_value=[]),
+            screen=MagicMock(return_value={"candidates": []}),
         )
 
         with patch("api.v1.endpoints.alphasift._import_alphasift", return_value=fake_module):
-            with self.assertRaises(HTTPException) as caught:
-                self._screen(config, market="cn", strategy="not_exist", max_results=5)
+            payload = self._screen(config, market="cn", strategy="custom_alpha", max_results=5)
 
-        self.assertEqual(caught.exception.status_code, 422)
-        self.assertEqual(caught.exception.detail["error"], "alphasift_invalid_strategy")
+        fake_module.screen.assert_called_once_with(
+            "custom_alpha",
+            market="cn",
+            max_results=5,
+            use_llm=False,
+        )
+        self.assertEqual(payload["candidates"], [])
+        self.assertEqual(payload["candidate_count"], 0)
+
+    def test_screen_allows_custom_strategy_when_strategies_list_is_empty(self) -> None:
+        config = self._config(enabled=True)
+        fake_module = _make_adapter_module(
+            list_strategies=lambda: [],
+            get_status=lambda: {"supported_markets": ["cn"]},
+            screen=MagicMock(return_value={"candidates": []}),
+        )
+
+        with patch("api.v1.endpoints.alphasift._import_alphasift", return_value=fake_module):
+            payload = self._screen(config, market="cn", strategy="fallback_custom", max_results=5)
+
+        fake_module.screen.assert_called_once_with(
+            "fallback_custom",
+            market="cn",
+            max_results=5,
+            use_llm=False,
+        )
+        self.assertEqual(payload["candidates"], [])
+        self.assertEqual(payload["candidate_count"], 0)
 
     def test_screen_rejects_unsupported_market(self) -> None:
         config = self._config(enabled=True)

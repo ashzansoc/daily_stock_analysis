@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import importlib
+import inspect
 import math
 import subprocess
 import sys
@@ -145,12 +146,7 @@ def alphasift_screen(
     adapter = _import_alphasift()
     screen = _get_adapter_callable(adapter, "screen", "alphasift.dsa_adapter.screen 不可调用。")
     try:
-        raw = screen(
-            request.strategy,
-            market=request.market,
-            max_output=request.max_results,
-            use_llm=False,
-        )
+        raw = _call_alphasift_screen(screen, request.strategy, request.market, request.max_results)
     except HTTPException as exc:
         raise
     except (ValueError, TypeError, KeyError) as exc:
@@ -271,19 +267,62 @@ def _normalize_strategy(raw: Any) -> Dict[str, Any]:
 
 def _ensure_supported_strategy(strategy: str) -> None:
     strategies = _list_strategies()
+    if not strategies:
+        return
+
     ids = {item.get("id") for item in strategies if item.get("id")}
-    if strategy not in ids:
-        available = sorted(ids)
-        raise HTTPException(
-            status_code=422,
-            detail={
-                "error": "alphasift_invalid_strategy",
-                "message": (
-                    f"策略 {strategy} 不在 AlphaSift 当前可用列表内"
-                    f"（可用策略：{', '.join(available[:50])}{'...' if len(available) > 50 else ''}）。"
-                ),
-            },
-        )
+    if strategy in ids:
+        return
+
+    # 兼容“策略列表为空时手动输入”以及“用户手动覆盖策略参数”场景，
+    # 策略由适配层进行最终校验，因此在列表外仍保持透传。
+
+
+def _call_alphasift_screen(screen: Any, strategy: str, market: str, max_results: int) -> Any:
+    signature = inspect.signature(screen)
+    params = signature.parameters
+    supports_var_kwargs = any(parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in params.values())
+    positional_params = [
+        parameter
+        for parameter in params.values()
+        if parameter.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+    ]
+    supports_var_positional = any(
+        parameter.kind == inspect.Parameter.VAR_POSITIONAL for parameter in params.values()
+    )
+
+    supports_max_results = "max_results" in params or supports_var_kwargs
+    supports_max_output = "max_output" in params or supports_var_kwargs
+    supports_use_llm = "use_llm" in params or supports_var_kwargs
+
+    kwargs: Dict[str, Any] = {"market": market}
+    if supports_max_results:
+        kwargs["max_results"] = max_results
+    elif supports_max_output:
+        kwargs["max_output"] = max_results
+    else:
+        kwargs["max_results"] = max_results
+
+    if supports_use_llm:
+        kwargs["use_llm"] = False
+
+    try:
+        return screen(strategy, **kwargs)
+    except TypeError as exc:
+        # 某些历史实现仅接受位置参数，进行一次降级兼容。
+        message = str(exc)
+        # 仅对函数签名不匹配类异常进行降级，避免将适配层运行期异常重复触发。
+        if "keyword" in message and "argument" in message:
+            if not (supports_var_kwargs or supports_var_positional or len(positional_params) >= 3):
+                raise exc
+            return screen(strategy, market, max_results)
+        if "positional" in message and "given" in message:
+            if not (supports_var_kwargs or supports_var_positional or len(positional_params) >= 3):
+                raise exc
+            return screen(strategy, market, max_results)
+        if not supports_var_kwargs and not (supports_var_positional or len(positional_params) >= 3):
+            raise exc
+        return screen(strategy, market, max_results)
 
 
 def _ensure_supported_market(market: str) -> None:

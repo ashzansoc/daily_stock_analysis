@@ -39,8 +39,15 @@ DSA 调用的 AlphaSift 接口固定为：
 alphasift = importlib.import_module("alphasift.dsa_adapter")
 alphasift.get_status()
 alphasift.list_strategies()
-alphasift.screen(strategy, market=market, max_output=max_results, use_llm=False)
+alphasift.screen(strategy, market=market, max_results=max_results, use_llm=False)
 ```
+
+为了兼容历史签名差异，后端会按优先级透传 `max_results` / `max_output`（均为 `request.max_results`）与可选 `use_llm`，避免由于关键字参数命名差异导致兼容回归。
+
+筛选策略约束：
+
+- 当 `list_strategies()` 返回非空时仍会回显给前端供展示。
+- 即使策略不在返回列表中，仍允许透传 `strategy` 到 `screen()`，由适配层负责参数合法性校验（用于兜底手动策略参数场景）。
 
 ## 契约与兼容验证
 
@@ -61,7 +68,7 @@ LLM 配置兼容边界（独立说明）：
 
 - 状态接口不返回 `install_spec` 明文。
 - 安装接口返回 `installed`/`already_installed`/`install_spec_is_default`，不返回 `install_spec` 明文。
-- `alphasift.get_status()` 用于可用性判断，`alphasift.list_strategies()` 用于动态策略下发，`alphasift.screen(strategy, market=..., max_output=..., use_llm=False)` 用于候选执行。
+- `alphasift.get_status()` 用于可用性判断，`alphasift.list_strategies()` 用于动态策略下发，`alphasift.screen(strategy, market=..., max_results=..., use_llm=False)` 用于候选执行。
 
 锁定 commit 的契约依据是该提交内的 Python 模块 `alphasift.dsa_adapter`（包内路径 `alphasift/dsa_adapter.py`）。当前 DSA 后端仍只调用上述三个函数，Web 侧仍只向后端提交 `market`、`strategy`、`max_results`，因此与主线配置页和 API 结构合并后不需要 AlphaSift 暴露额外字段或内部 pipeline。
 
