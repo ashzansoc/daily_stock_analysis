@@ -200,7 +200,7 @@ describe('alphasiftApi', () => {
 
     const result = await alphasiftApi.getStrategies();
 
-    expect(get).toHaveBeenCalledWith('/api/v1/alphasift/strategies');
+    expect(get).toHaveBeenCalledWith('/api/v1/alphasift/strategies', { timeout: 300000 });
     expect(result.enabled).toBe(true);
     expect(result.strategyCount).toBe(1);
     expect(result.strategies[0].id).toBe('dual_low');

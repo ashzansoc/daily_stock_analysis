@@ -60,9 +60,9 @@ AlphaSift 侧已在 `ZhuLinsen/alphasift@b2ca66dd47001b9a09890cfe21c2b18c7219ccf
 ## DSA 后端行为
 
 - `/api/v1/alphasift/status`：返回开关、可用性、默认安装来源标识和适配层元信息；不会暴露完整安装来源。
-- `/api/v1/alphasift/install`：开启流程在适配层缺失时会调用它，不要求管理员会话；接口只允许默认受信任安装来源。
-- `/api/v1/alphasift/strategies`：读取 AlphaSift 策略列表。
-- `/api/v1/alphasift/screen`：调用适配层 `screen(..., use_llm=True)`，返回候选、运行元信息和 LLM 展示字段。
+- `/api/v1/alphasift/install`：开启流程在适配层缺失时会调用它，不要求管理员会话；接口只允许默认受信任安装来源，并会强制重装锁定 commit，避免旧版 `alphasift` 包残留。
+- `/api/v1/alphasift/strategies`：读取 AlphaSift 策略列表；如果 `ALPHASIFT_ENABLED=true` 但适配层缺失，会先自动安装后再读取。
+- `/api/v1/alphasift/screen`：调用适配层 `screen(..., use_llm=True)`，返回候选、运行元信息和 LLM 展示字段；如果已开启但适配层缺失，会先自动安装后再运行。
 
 ## 配置兼容边界（LLM / LiteLLM / Base URL）
 
@@ -82,7 +82,7 @@ AlphaSift 侧已在 `ZhuLinsen/alphasift@b2ca66dd47001b9a09890cfe21c2b18c7219ccf
 
 ## Web 行为
 
-- 设置页提供 AlphaSift 开关，开启后写入 `ALPHASIFT_ENABLED=true` 并检查适配层是否可用；若缺失，会自动调用受控安装接口，不要求用户再点一次安装。
+- 设置页提供 AlphaSift 开关，开启后写入 `ALPHASIFT_ENABLED=true` 并检查适配层是否可用；若缺失，会自动调用受控安装接口，不要求用户再点一次安装。若配置已是开启状态但适配层缺失，策略列表加载也会触发自动安装。
 - `ALPHASIFT_ENABLED` 是“开启选股”按钮背后的持久化状态，不作为普通数据源配置项重复展示。
 - 选股页未开启时展示开启按钮；开启后读取 AlphaSift 策略列表。
 - 当前只暴露 A 股 `cn` 市场。

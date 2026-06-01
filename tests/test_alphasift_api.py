@@ -201,6 +201,21 @@ class AlphaSiftOpportunitiesApiTestCase(unittest.TestCase):
         self.assertEqual(payload["strategies"][0]["name"], "双低选股")
         self.assertEqual(payload["strategies"][1]["name"], "趋势质量")
 
+    def test_strategies_installs_when_enabled_but_adapter_missing(self) -> None:
+        config = self._config(enabled=True)
+        fake_module = _make_adapter_module()
+
+        with (
+            patch("api.v1.endpoints.alphasift._is_alphasift_available", return_value=False),
+            patch("api.v1.endpoints.alphasift._install_alphasift") as install_mock,
+            patch("api.v1.endpoints.alphasift._import_alphasift", return_value=fake_module),
+        ):
+            payload = self._strategies(config=config)
+
+        install_mock.assert_called_once_with(config)
+        self.assertEqual(payload["enabled"], True)
+        self.assertEqual(payload["strategy_count"], 1)
+
     def test_screen_rejects_when_disabled(self) -> None:
         config = self._config(enabled=False)
 
@@ -214,15 +229,15 @@ class AlphaSiftOpportunitiesApiTestCase(unittest.TestCase):
         config = self._config(enabled=True)
 
         with (
-            patch("api.v1.endpoints.alphasift.subprocess.run") as run_mock,
-            patch("api.v1.endpoints.alphasift._import_alphasift", side_effect=_raise_alphasift_unavailable),
+            patch("api.v1.endpoints.alphasift._is_alphasift_available", return_value=False),
+            patch("api.v1.endpoints.alphasift._install_alphasift", side_effect=lambda _config: _raise_alphasift_unavailable()) as install_mock,
         ):
             with self.assertRaises(HTTPException) as caught:
                 self._screen(config)
 
         self.assertEqual(caught.exception.status_code, 424)
         self.assertEqual(caught.exception.detail["error"], "alphasift_unavailable")
-        run_mock.assert_not_called()
+        install_mock.assert_called_once_with(config)
 
     def test_install_rejects_when_disabled_without_side_effects(self) -> None:
         config = self._config(enabled=False)
@@ -259,7 +274,10 @@ class AlphaSiftOpportunitiesApiTestCase(unittest.TestCase):
         self.assertEqual(payload["install_spec_is_default"], True)
         self.assertNotIn("install_spec", payload)
         run_mock.assert_called_once()
-        self.assertIn(DEFAULT_ALPHASIFT_TEST_SPEC, run_mock.call_args.args[0])
+        install_command = run_mock.call_args.args[0]
+        self.assertIn("--upgrade", install_command)
+        self.assertIn("--force-reinstall", install_command)
+        self.assertIn(DEFAULT_ALPHASIFT_TEST_SPEC, install_command)
 
     def test_install_rejects_when_alphasift_adapter_reports_unavailable(self) -> None:
         config = self._config(enabled=True)
@@ -352,6 +370,27 @@ class AlphaSiftOpportunitiesApiTestCase(unittest.TestCase):
         self.assertEqual(payload["candidates"][0]["risk_level"], "medium")
         self.assertEqual(payload["candidates"][0]["price"], 1688.0)
         self.assertEqual(payload["candidates"][0]["industry"], "Baijiu")
+
+    def test_screen_installs_when_enabled_but_adapter_missing(self) -> None:
+        config = self._config(enabled=True)
+        fake_module = _make_adapter_module(screen=MagicMock(return_value={"candidates": []}))
+
+        with (
+            patch("api.v1.endpoints.alphasift._is_alphasift_available", return_value=False),
+            patch("api.v1.endpoints.alphasift._install_alphasift") as install_mock,
+            patch("api.v1.endpoints.alphasift._import_alphasift", return_value=fake_module),
+        ):
+            payload = self._screen(config, market="cn", strategy="dual_low", max_results=5)
+
+        install_mock.assert_called_once_with(config)
+        fake_module.screen.assert_called_once_with(
+            "dual_low",
+            market="cn",
+            max_results=5,
+            use_llm=True,
+        )
+        self.assertEqual(payload["candidates"], [])
+        self.assertEqual(payload["candidate_count"], 0)
 
     def test_screen_normalizes_non_finite_values(self) -> None:
         config = self._config(enabled=True)

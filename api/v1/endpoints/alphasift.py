@@ -65,6 +65,7 @@ def alphasift_status(config: Config = Depends(get_config_dep)) -> Dict[str, Any]
 @router.get("/strategies")
 def alphasift_strategies(config: Config = Depends(get_config_dep)) -> Dict[str, Any]:
     _ensure_alphasift_enabled(config)
+    _ensure_alphasift_ready(config)
     strategies = _list_strategies()
     return {
         "enabled": True,
@@ -93,8 +94,10 @@ def _install_alphasift(config: Config) -> Dict[str, Any]:
     install_spec = _validate_install_spec(config.alphasift_install_spec)
 
     try:
+        _purge_alphasift_modules()
+        importlib.invalidate_caches()
         completed = subprocess.run(
-            [sys.executable, "-m", "pip", "install", install_spec],
+            [sys.executable, "-m", "pip", "install", "--upgrade", "--force-reinstall", install_spec],
             check=False,
             capture_output=True,
             text=True,
@@ -119,6 +122,7 @@ def _install_alphasift(config: Config) -> Dict[str, Any]:
         )
 
     importlib.invalidate_caches()
+    _purge_alphasift_modules()
     adapter_status = _call_alphasift_status()
     if not _is_adapter_available(adapter_status):
         raise HTTPException(
@@ -165,6 +169,7 @@ def alphasift_screen(
     config: Config = Depends(get_config_dep),
 ) -> Dict[str, Any]:
     _ensure_alphasift_enabled(config)
+    _ensure_alphasift_ready(config)
     _ensure_supported_market(request.market)
     _ensure_supported_strategy(request.strategy)
 
@@ -223,6 +228,12 @@ def _ensure_alphasift_enabled(config: Config) -> None:
             status_code=403,
             detail={"error": "alphasift_disabled", "message": "ALPHASIFT_ENABLED is false."},
         )
+
+
+def _ensure_alphasift_ready(config: Config) -> None:
+    if _is_alphasift_available():
+        return
+    _install_alphasift(config)
 
 
 def _is_alphasift_available() -> bool:
@@ -330,6 +341,12 @@ def _call_alphasift_status() -> Dict[str, Any]:
 
 def _is_expected_alphasift_missing(exc: ModuleNotFoundError) -> bool:
     return getattr(exc, "name", None) in ALPHASIFT_EXPECTED_MISSING_MODULES
+
+
+def _purge_alphasift_modules() -> None:
+    for module_name in list(sys.modules):
+        if module_name == "alphasift" or module_name.startswith("alphasift."):
+            sys.modules.pop(module_name, None)
 
 
 def _alphasift_unavailable_exception(
