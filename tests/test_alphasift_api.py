@@ -457,6 +457,7 @@ class AlphaSiftOpportunitiesApiTestCase(unittest.TestCase):
                     "strategy": "dual_low",
                     "market": "cn",
                     "snapshot_count": 100,
+                    "snapshot_source": "em_datacenter",
                     "after_filter_count": 5,
                     "llm_ranked": True,
                     "llm_coverage": 1.0,
@@ -493,6 +494,7 @@ class AlphaSiftOpportunitiesApiTestCase(unittest.TestCase):
         self.assertEqual(fake_module.screen.call_args.kwargs["context"]["llm"]["model"], "")
         self.assertEqual(payload["run_id"], "run123")
         self.assertEqual(payload["snapshot_count"], 100)
+        self.assertEqual(payload["snapshot_source"], "em_datacenter")
         self.assertEqual(payload["after_filter_count"], 5)
         self.assertEqual(payload["llm_ranked"], True)
         self.assertEqual(payload["llm_coverage"], 1.0)
@@ -605,6 +607,94 @@ class AlphaSiftOpportunitiesApiTestCase(unittest.TestCase):
         fundamentals_mock.assert_not_called()
         news_mock.assert_not_called()
 
+    def test_screen_completes_light_alphasift_context_with_news_only(self) -> None:
+        config = self._config(enabled=True)
+        fake_module = _make_adapter_module(
+            screen=MagicMock(
+                return_value={
+                    "candidates": [
+                        {
+                            "code": "600519",
+                            "name": "贵州茅台",
+                            "score": 88.5,
+                            "dsa_context": {
+                                "enriched": True,
+                                "profile": "pre_rank_light",
+                                "news_included": False,
+                                "quote": {"price": 1688.0, "change_pct": 1.2},
+                                "fundamentals": {"coverage": {"valuation": "available"}},
+                                "news": {
+                                    "success": False,
+                                    "skipped": True,
+                                    "reason": "pre_rank_light_context",
+                                    "results": [],
+                                },
+                            },
+                            "dsa_news": [],
+                            "dsa_analysis_summary": "DSA行情: 现价 1688.0",
+                        }
+                    ]
+                }
+            ),
+        )
+        fake_manager = SimpleNamespace(get_stock_name=MagicMock(return_value="贵州茅台"))
+
+        with (
+            patch("src.services.alphasift_service._import_alphasift", return_value=fake_module),
+            patch("src.services.alphasift_service._get_dsa_fetcher_manager", return_value=fake_manager),
+            patch("src.services.alphasift_service.get_dsa_realtime_quote") as quote_mock,
+            patch("src.services.alphasift_service.get_dsa_fundamental_context") as fundamentals_mock,
+            patch(
+                "src.services.alphasift_service.search_dsa_stock_news",
+                return_value={
+                    "success": True,
+                    "provider": "test",
+                    "results": [{"title": "贵州茅台最新公告", "source": "测试源"}],
+                },
+            ) as news_mock,
+        ):
+            payload = self._screen(
+                config,
+                market="cn",
+                strategy="dual_low",
+                max_results=5,
+                mock_enrichment=False,
+            )
+
+        candidate = payload["candidates"][0]
+        self.assertEqual(candidate["dsa_context"]["profile"], "post_rank_full")
+        self.assertTrue(candidate["dsa_context"]["news_included"])
+        self.assertEqual(candidate["dsa_context"]["quote"]["price"], 1688.0)
+        self.assertEqual(candidate["dsa_context"]["fundamentals"]["coverage"]["valuation"], "available")
+        self.assertEqual(candidate["dsa_news"][0]["title"], "贵州茅台最新公告")
+        quote_mock.assert_not_called()
+        fundamentals_mock.assert_not_called()
+        news_mock.assert_called_once()
+
+    def test_dsa_pre_rank_candidate_context_omits_news(self) -> None:
+        fake_manager = SimpleNamespace(get_stock_name=MagicMock(return_value="贵州茅台"))
+
+        with (
+            patch("src.services.alphasift_service._get_dsa_fetcher_manager", return_value=fake_manager),
+            patch(
+                "src.services.alphasift_service.get_dsa_realtime_quote",
+                return_value={"price": 1688.0, "change_pct": 1.2, "amount": 100000000.0},
+            ),
+            patch(
+                "src.services.alphasift_service.get_dsa_fundamental_context",
+                return_value={"market": "cn", "coverage": {"valuation": "available"}},
+            ),
+            patch("src.services.alphasift_service.search_dsa_stock_news") as news_mock,
+        ):
+            context = alphasift_service.get_dsa_candidate_context("600519", "贵州茅台")
+
+        self.assertEqual(context["profile"], "pre_rank_light")
+        self.assertFalse(context["news_included"])
+        self.assertTrue(context["news"]["skipped"])
+        self.assertEqual(context["quote"]["price"], 1688.0)
+        self.assertEqual(context["fundamentals"]["coverage"]["valuation"], "available")
+        news_mock.assert_not_called()
+
     def test_screen_bridges_dsa_llm_config_into_alphasift_runtime(self) -> None:
         config = Config(
             alphasift_enabled=True,
@@ -634,6 +724,10 @@ class AlphaSiftOpportunitiesApiTestCase(unittest.TestCase):
                 "LLM_GEMINI_API_KEYS": alphasift_service.os.environ.get("LLM_GEMINI_API_KEYS"),
                 "LLM_GEMINI_EXTRA_HEADERS": alphasift_service.os.environ.get("LLM_GEMINI_EXTRA_HEADERS"),
                 "GEMINI_API_KEY": alphasift_service.os.environ.get("GEMINI_API_KEY"),
+                "LLM_CANDIDATE_CONTEXT_ENABLED": alphasift_service.os.environ.get("LLM_CANDIDATE_CONTEXT_ENABLED"),
+                "LLM_CANDIDATE_MULTIPLIER": alphasift_service.os.environ.get("LLM_CANDIDATE_MULTIPLIER"),
+                "LLM_MAX_CANDIDATES": alphasift_service.os.environ.get("LLM_MAX_CANDIDATES"),
+                "SNAPSHOT_SOURCE_PRIORITY": alphasift_service.os.environ.get("SNAPSHOT_SOURCE_PRIORITY"),
             }
             captured["context"] = kwargs.get("context")
             return {"candidates": []}
@@ -641,7 +735,17 @@ class AlphaSiftOpportunitiesApiTestCase(unittest.TestCase):
         fake_module = _make_adapter_module(screen=MagicMock(side_effect=screen_impl))
 
         with (
-            patch.dict(alphasift_service.os.environ, {"GEMINI_API_KEY": "outer-key", "SNAPSHOT_SOURCE_PRIORITY": ""}, clear=False),
+            patch.dict(
+                alphasift_service.os.environ,
+                {
+                    "GEMINI_API_KEY": "outer-key",
+                    "SNAPSHOT_SOURCE_PRIORITY": "",
+                    "LLM_CANDIDATE_CONTEXT_ENABLED": "true",
+                    "LLM_CANDIDATE_MULTIPLIER": "",
+                    "LLM_MAX_CANDIDATES": "",
+                },
+                clear=False,
+            ),
             patch("src.services.alphasift_service._import_alphasift", return_value=fake_module),
         ):
             payload = self._screen(config, market="cn", strategy="dual_low", max_results=5)
@@ -656,13 +760,24 @@ class AlphaSiftOpportunitiesApiTestCase(unittest.TestCase):
         self.assertEqual(runtime_env["LLM_GEMINI_API_KEYS"], "dsa-gemini-key")
         self.assertEqual(runtime_env["LLM_GEMINI_EXTRA_HEADERS"], '{"x-tenant": "dsa"}')
         self.assertEqual(runtime_env["GEMINI_API_KEY"], "dsa-gemini-key")
+        self.assertEqual(runtime_env["LLM_CANDIDATE_CONTEXT_ENABLED"], "false")
+        self.assertEqual(runtime_env["LLM_CANDIDATE_MULTIPLIER"], "2")
+        self.assertEqual(runtime_env["LLM_MAX_CANDIDATES"], "10")
+        self.assertEqual(runtime_env["SNAPSHOT_SOURCE_PRIORITY"], "em_datacenter,tushare,efinance,akshare_em")
         context = captured["context"]
         self.assertIsInstance(context, dict)
         self.assertEqual(context["llm"]["model"], "gemini/gemini-2.5-flash")
+        self.assertFalse(context["llm"]["candidate_context_enabled"])
+        self.assertEqual(context["llm"]["candidate_multiplier"], 2)
+        self.assertEqual(context["llm"]["max_candidates"], 10)
         self.assertEqual(context["llm"]["channels"][0]["api_keys"], ["dsa-gemini-key"])
         self.assertEqual(context["llm"]["channels"][0]["extra_headers"], {"x-tenant": "dsa"})
         self.assertEqual(context["llm"]["model_list"][0]["litellm_params"]["extra_headers"], {"x-tenant": "dsa"})
         self.assertIn("get_candidate_context", context["dsa"])
+        self.assertEqual(context["dsa"]["mode"], "pre_rank_light")
+        self.assertEqual(context["dsa"]["max_candidates"], 3)
+        self.assertFalse(context["dsa"]["include_news"])
+        self.assertNotIn("search_stock_news", context["dsa"])
         self.assertEqual(payload["candidate_count"], 0)
 
     def test_screen_injects_dsa_channel_headers_into_alphasift_litellm_calls(self) -> None:

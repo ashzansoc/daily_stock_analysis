@@ -32,7 +32,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [改进] Docker 镜像构建阶段通过 `requirements.txt` 预置 AlphaSift 适配层，与桌面发布包一样避免运行期额外安装。
 - [新功能] 新增默认关闭的 AlphaSift 选股页签，通过 `ALPHASIFT_ENABLED` 开启后经由稳定适配层读取策略并执行选股。
 - [改进] AlphaSift 选股改为依赖 `alphasift.dsa_adapter` 的稳定接口，Web 策略列表由 AlphaSift 动态提供，不再在前端硬编码。
-- [改进] AlphaSift 依赖更新到支持 DSA provider context 的提交，选股结果会保留 AlphaSift 在 LLM 重排前消费 DSA 数据生成的 `dsa_context`、`dsa_news` 和摘要，避免返回后重复补全同一候选。
+- [改进] AlphaSift 依赖更新到支持 DSA provider context 的提交，选股结果会保留 AlphaSift 在 LLM 重排前消费 DSA 数据生成的 `dsa_context`，并在 DSA 返回阶段复用或补全 `dsa_news` 和摘要，避免重复补全同一候选。
+- [改进] AlphaSift 选股初筛阶段改为轻量 DSA provider context，LLM 前仅补行情和基本面并限制重排候选池，新闻搜索延后到最终 Top 候选阶段，减少外部依赖超时。
+- [改进] AlphaSift 选股默认快照源优先使用 `em_datacenter`，并继续保留显式 `SNAPSHOT_SOURCE_PRIORITY` 覆盖能力，减少快照源 fallback 等待。
 - [改进] AlphaSift 选股提示会压缩数据源降级和连接异常文案，并限制长 URL/异常文本换行，避免提示框横向溢出。
 - [改进] AlphaSift 选股页补充 Run ID、快照数、过滤后数量、因子和风险详情，展开候选时展示真实明细，并暂时仅开放当前支持的 A 股市场。
 - [修复] AlphaSift DSA 适配层默认开启 LLM 重排，后端显式请求 `use_llm=True`，选股页展示 LLM 分数、判断、覆盖率和关注项。

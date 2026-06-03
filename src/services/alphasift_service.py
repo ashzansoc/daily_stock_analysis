@@ -32,6 +32,10 @@ _ALPHASIFT_INSTALL_LOCK = threading.RLock()
 ALPHASIFT_MANAGED_LITELLM_PROVIDERS = frozenset({"gemini", "vertex_ai", "anthropic", "openai", "deepseek"})
 _ALPHASIFT_RUNTIME_ENV_LOCK = threading.RLock()
 DSA_ENRICHMENT_MAX_CANDIDATES = 3
+DSA_PRE_RANK_CONTEXT_MAX_CANDIDATES = 3
+DSA_ALPHASIFT_LLM_CANDIDATE_MULTIPLIER = 2
+DSA_ALPHASIFT_LLM_MAX_CANDIDATES = 12
+DSA_ALPHASIFT_SNAPSHOT_SOURCE_PRIORITY = "em_datacenter,tushare,efinance,akshare_em"
 _DSA_FETCHER_MANAGER_LOCK = threading.RLock()
 _DSA_FETCHER_MANAGER: Any = None
 _FUNDAMENTAL_BLOCKS = ("valuation", "growth", "earnings", "institution", "capital_flow", "boards")
@@ -128,6 +132,7 @@ class AlphaSiftService:
             "strategy": raw_data.get("strategy") or strategy,
             "market": raw_data.get("market") or market,
             "snapshot_count": raw_data.get("snapshot_count"),
+            "snapshot_source": raw_data.get("snapshot_source") or "",
             "after_filter_count": raw_data.get("after_filter_count"),
             "llm_ranked": raw_data.get("llm_ranked"),
             "llm_market_view": raw_data.get("llm_market_view") or "",
@@ -570,9 +575,9 @@ def _call_alphasift_screen(screen: Any, strategy: str, market: str, max_results:
     if supports_use_llm:
         kwargs["use_llm"] = True
     if supports_context:
-        kwargs["context"] = _build_alphasift_context(config)
+        kwargs["context"] = _build_alphasift_context(config, max_results=max_results)
 
-    with _alphasift_runtime_env(config), _alphasift_litellm_headers(config):
+    with _alphasift_runtime_env(config, max_results=max_results), _alphasift_litellm_headers(config):
         try:
             return screen(strategy, **kwargs)
         except TypeError as exc:
@@ -595,8 +600,8 @@ def _call_alphasift_screen(screen: Any, strategy: str, market: str, max_results:
 
 
 @contextmanager
-def _alphasift_runtime_env(config: Config) -> Iterator[None]:
-    updates = _build_alphasift_runtime_env(config)
+def _alphasift_runtime_env(config: Config, *, max_results: Optional[int] = None) -> Iterator[None]:
+    updates = _build_alphasift_runtime_env(config, max_results=max_results)
     if not updates:
         yield
         return
@@ -615,13 +620,18 @@ def _alphasift_runtime_env(config: Config) -> Iterator[None]:
                     os.environ[key] = value  # type: ignore[assignment]
 
 
-def _build_alphasift_runtime_env(config: Config) -> Dict[str, str]:
+def _build_alphasift_runtime_env(config: Config, *, max_results: Optional[int] = None) -> Dict[str, str]:
     env: Dict[str, str] = {}
 
     def put(key: str, value: Any) -> None:
         text = _env_text(value)
         if text:
             env[key] = text
+
+    def put_default(key: str, value: Any) -> None:
+        if os.getenv(key) not in (None, ""):
+            return
+        put(key, value)
 
     litellm_model, fallback_models = _resolve_alphasift_llm_models(config)
     put("LITELLM_MODEL", litellm_model)
@@ -670,10 +680,14 @@ def _build_alphasift_runtime_env(config: Config) -> Dict[str, str]:
     _put_provider_keys(env, "DEEPSEEK", deepseek_keys)
 
     put("OPENAI_BASE_URL", config.openai_base_url or _first_channel_base_url(channels, {"openai"}))
+    put("LLM_CANDIDATE_CONTEXT_ENABLED", "false")
+    put_default("LLM_CANDIDATE_MULTIPLIER", str(DSA_ALPHASIFT_LLM_CANDIDATE_MULTIPLIER))
+    put_default("LLM_MAX_CANDIDATES", str(_resolve_dsa_llm_max_candidates(max_results)))
+    put_default("SNAPSHOT_SOURCE_PRIORITY", DSA_ALPHASIFT_SNAPSHOT_SOURCE_PRIORITY)
     return env
 
 
-def _build_alphasift_context(config: Config) -> Dict[str, Any]:
+def _build_alphasift_context(config: Config, *, max_results: Optional[int] = None) -> Dict[str, Any]:
     channels = _normalize_dsa_llm_channels(config)
     litellm_model, fallback_models = _resolve_alphasift_llm_models(config)
     return {
@@ -684,22 +698,26 @@ def _build_alphasift_context(config: Config) -> Dict[str, Any]:
             "channels": channels,
             "model_list": _build_alphasift_litellm_model_list(config, channels),
             "litellm_config_path": config.litellm_config_path or "",
+            "candidate_context_enabled": False,
+            "candidate_multiplier": DSA_ALPHASIFT_LLM_CANDIDATE_MULTIPLIER,
+            "max_candidates": _resolve_dsa_llm_max_candidates(max_results),
         },
         "dsa": {
             "contract_version": "1",
+            "mode": "pre_rank_light",
+            "max_candidates": DSA_PRE_RANK_CONTEXT_MAX_CANDIDATES,
+            "include_news": False,
+            "news_max_results": 0,
             "capabilities": [
                 "candidate_context",
                 "realtime_quote",
                 "fundamental_context",
-                "stock_news",
             ],
             "get_candidate_context": get_dsa_candidate_context,
             "get_realtime_quote": get_dsa_realtime_quote,
             "get_fundamental_context": get_dsa_fundamental_context,
-            "search_stock_news": search_dsa_stock_news,
         },
     }
-
 
 @contextmanager
 def _alphasift_litellm_headers(config: Config) -> Iterator[None]:
@@ -825,6 +843,14 @@ def _match_alphasift_litellm_headers(
         headers = route.get("extra_headers")
         return dict(headers) if isinstance(headers, dict) else {}
     return {}
+
+
+def _resolve_dsa_llm_max_candidates(max_results: Optional[int]) -> int:
+    requested = max_results if isinstance(max_results, int) and max_results > 0 else DSA_ENRICHMENT_MAX_CANDIDATES
+    return min(
+        DSA_ALPHASIFT_LLM_MAX_CANDIDATES,
+        max(requested, requested * DSA_ALPHASIFT_LLM_CANDIDATE_MULTIPLIER),
+    )
 
 
 def _resolve_alphasift_llm_models(config: Config) -> Tuple[str, List[str]]:
@@ -1006,9 +1032,21 @@ def search_dsa_stock_news(stock_code: str, stock_name: str = "", max_results: in
     )
 
 
-def get_dsa_candidate_context(stock_code: str, stock_name: str = "") -> Dict[str, Any]:
+def get_dsa_candidate_context(
+    stock_code: str,
+    stock_name: str = "",
+    *,
+    include_news: bool = False,
+    include_fundamentals: bool = True,
+    mode: str = "pre_rank_light",
+) -> Dict[str, Any]:
     candidate = {"code": stock_code, "name": stock_name, "raw": {}}
-    context = _build_dsa_candidate_context(candidate)
+    context = _build_dsa_candidate_context(
+        candidate,
+        include_news=include_news,
+        include_fundamentals=include_fundamentals,
+        profile=mode or "pre_rank_light",
+    )
     return context.get("dsa_context", {})
 
 
@@ -1021,7 +1059,11 @@ def _enrich_candidates_with_dsa(candidates: List[Dict[str, Any]]) -> Tuple[List[
         if index >= limit:
             continue
         existing_context = candidate.get("dsa_context")
-        if isinstance(existing_context, dict) and existing_context.get("enriched"):
+        if (
+            isinstance(existing_context, dict)
+            and existing_context.get("enriched")
+            and _candidate_has_dsa_news(candidate)
+        ):
             enriched_count += 1
             existing_warnings = existing_context.get("warnings") or []
             if isinstance(existing_warnings, list):
@@ -1030,7 +1072,12 @@ def _enrich_candidates_with_dsa(candidates: List[Dict[str, Any]]) -> Tuple[List[
                 warnings.append(str(existing_warnings))
             continue
         try:
-            enriched = _build_dsa_candidate_context(candidate)
+            enriched = _build_dsa_candidate_context(
+                candidate,
+                include_news=True,
+                include_fundamentals=True,
+                profile="post_rank_full",
+            )
             candidate.update(enriched)
             if enriched.get("dsa_context", {}).get("enriched"):
                 enriched_count += 1
@@ -1054,7 +1101,32 @@ def _enrich_candidates_with_dsa(candidates: List[Dict[str, Any]]) -> Tuple[List[
     }
 
 
-def _build_dsa_candidate_context(candidate: Dict[str, Any]) -> Dict[str, Any]:
+def _candidate_has_dsa_news(candidate: Dict[str, Any]) -> bool:
+    news_items = candidate.get("dsa_news")
+    if isinstance(news_items, list) and any(isinstance(item, dict) for item in news_items):
+        return True
+    context = candidate.get("dsa_context")
+    if not isinstance(context, dict):
+        return False
+    return _news_has_results(context.get("news"))
+
+
+def _news_has_results(news: Any) -> bool:
+    if isinstance(news, dict):
+        results = news.get("results")
+        return isinstance(results, list) and any(isinstance(item, dict) for item in results)
+    if isinstance(news, list):
+        return any(isinstance(item, dict) for item in news)
+    return False
+
+
+def _build_dsa_candidate_context(
+    candidate: Dict[str, Any],
+    *,
+    include_news: bool = True,
+    include_fundamentals: bool = True,
+    profile: str = "post_rank_full",
+) -> Dict[str, Any]:
     code = _env_text(candidate.get("code"))
     name = _env_text(candidate.get("name"))
     warnings: List[str] = []
@@ -1066,9 +1138,23 @@ def _build_dsa_candidate_context(candidate: Dict[str, Any]) -> Dict[str, Any]:
             }
         }
 
-    quote: Dict[str, Any] = {}
-    fundamentals: Dict[str, Any] = {}
-    news: Dict[str, Any] = {"success": False, "results": []}
+    existing_context = candidate.get("dsa_context")
+    if not isinstance(existing_context, dict):
+        existing_context = {}
+
+    quote = existing_context.get("quote") if isinstance(existing_context.get("quote"), dict) else {}
+    fundamentals = (
+        existing_context.get("fundamentals")
+        if isinstance(existing_context.get("fundamentals"), dict)
+        else {}
+    )
+    existing_news = existing_context.get("news") if isinstance(existing_context.get("news"), dict) else {}
+    news: Dict[str, Any] = dict(existing_news) if existing_news else {"success": False, "results": []}
+    existing_warnings = existing_context.get("warnings") or []
+    if isinstance(existing_warnings, list):
+        warnings.extend(str(item) for item in existing_warnings if item)
+    elif existing_warnings:
+        warnings.append(str(existing_warnings))
 
     try:
         manager = _get_dsa_fetcher_manager()
@@ -1079,34 +1165,51 @@ def _build_dsa_candidate_context(candidate: Dict[str, Any]) -> Dict[str, Any]:
     except Exception as exc:  # noqa: BLE001
         warnings.append(f"stock_name_failed: {exc}")
 
-    try:
-        quote = get_dsa_realtime_quote(code)
-        if quote:
-            candidate["price"] = _first_non_empty(candidate.get("price"), quote.get("price"))
-            candidate["change_pct"] = _first_non_empty(candidate.get("change_pct"), quote.get("change_pct"))
-            candidate["amount"] = _first_non_empty(candidate.get("amount"), quote.get("amount"))
-            if not candidate.get("name") and quote.get("name"):
-                candidate["name"] = quote.get("name")
-        else:
-            warnings.append("realtime_quote_missing")
-    except Exception as exc:  # noqa: BLE001
-        warnings.append(f"realtime_quote_failed: {exc}")
+    if not quote:
+        try:
+            quote = get_dsa_realtime_quote(code)
+            if not quote:
+                warnings.append("realtime_quote_missing")
+        except Exception as exc:  # noqa: BLE001
+            warnings.append(f"realtime_quote_failed: {exc}")
+            quote = {}
 
-    try:
-        fundamentals = get_dsa_fundamental_context(code)
-    except Exception as exc:  # noqa: BLE001
-        warnings.append(f"fundamental_context_failed: {exc}")
+    if quote:
+        candidate["price"] = _first_non_empty(candidate.get("price"), quote.get("price"))
+        candidate["change_pct"] = _first_non_empty(candidate.get("change_pct"), quote.get("change_pct"))
+        candidate["amount"] = _first_non_empty(candidate.get("amount"), quote.get("amount"))
+        if not candidate.get("name") and quote.get("name"):
+            candidate["name"] = quote.get("name")
 
-    try:
-        news = search_dsa_stock_news(code, _env_text(candidate.get("name")) or name or code, max_results=3)
-        if not news.get("success"):
-            warnings.append(news.get("error") or "stock_news_unavailable")
-    except Exception as exc:  # noqa: BLE001
-        warnings.append(f"stock_news_failed: {exc}")
+    if include_fundamentals and not fundamentals:
+        try:
+            fundamentals = get_dsa_fundamental_context(code)
+        except Exception as exc:  # noqa: BLE001
+            warnings.append(f"fundamental_context_failed: {exc}")
+            fundamentals = {}
+
+    if include_news:
+        if not _news_has_results(news):
+            try:
+                news = search_dsa_stock_news(code, _env_text(candidate.get("name")) or name or code, max_results=3)
+                if not news.get("success"):
+                    warnings.append(news.get("error") or "stock_news_unavailable")
+            except Exception as exc:  # noqa: BLE001
+                warnings.append(f"stock_news_failed: {exc}")
+                news = {"success": False, "error": str(exc), "results": []}
+    elif not _news_has_results(news):
+        news = {
+            "success": False,
+            "skipped": True,
+            "reason": "pre_rank_light_context",
+            "results": [],
+        }
 
     summary = _build_dsa_analysis_summary(candidate, quote, fundamentals, news)
     context = {
         "enriched": bool(quote or fundamentals or news.get("results")),
+        "profile": profile,
+        "news_included": bool(include_news),
         "quote": quote,
         "fundamentals": fundamentals,
         "news": news,
