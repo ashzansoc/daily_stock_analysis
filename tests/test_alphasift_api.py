@@ -6,7 +6,7 @@ from __future__ import annotations
 import os
 import sys
 import unittest
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from typing import Any, Dict
 from unittest.mock import ANY, MagicMock, patch
 import threading
@@ -507,6 +507,62 @@ class AlphaSiftOpportunitiesApiTestCase(unittest.TestCase):
         self.assertEqual(payload["candidates"][0]["risk_level"], "medium")
         self.assertEqual(payload["candidates"][0]["price"], 1688.0)
         self.assertEqual(payload["candidates"][0]["industry"], "Baijiu")
+
+    def test_screen_prefers_dsa_daily_history_for_alphasift_enrichment(self) -> None:
+        config = self._config(enabled=True)
+        parent_module = ModuleType("alphasift")
+        daily_module = ModuleType("alphasift.daily")
+        original_daily_fetch = MagicMock(side_effect=AssertionError("AlphaSift daily fetch should not run first"))
+        daily_module.fetch_daily_history = original_daily_fetch
+        parent_module.daily = daily_module
+        captured: Dict[str, Any] = {}
+
+        def screen_with_daily_fetch(strategy: str, **kwargs: Any) -> Dict[str, Any]:
+            daily_df = daily_module.fetch_daily_history(
+                "600519",
+                lookback_days=20,
+                source="akshare",
+                retries=1,
+            )
+            captured["daily_df"] = daily_df
+            captured["context"] = kwargs.get("context")
+            return {
+                "strategy": strategy,
+                "candidates": [{"code": "600519", "score": 88.0}],
+            }
+
+        fake_module = _make_adapter_module(screen=MagicMock(side_effect=screen_with_daily_fetch))
+
+        with (
+            patch.dict(sys.modules, {"alphasift": parent_module, "alphasift.daily": daily_module}),
+            patch("src.services.alphasift_service._import_alphasift", return_value=fake_module),
+            patch(
+                "src.services.alphasift_service.get_dsa_daily_history",
+                return_value=(
+                    [
+                        {
+                            "trade_date": "20260603",
+                            "close": "10.5",
+                            "vol": "123400",
+                        }
+                    ],
+                    "EfinanceFetcher",
+                ),
+            ) as dsa_history_mock,
+        ):
+            payload = self._screen(config, market="cn", strategy="dual_low", max_results=5)
+
+        daily_df = captured["daily_df"]
+        self.assertEqual(daily_df.attrs["source"], "dsa:EfinanceFetcher")
+        self.assertEqual(daily_df.loc[0, "date"], "2026-06-03")
+        self.assertEqual(daily_df.loc[0, "volume"], 123400)
+        self.assertEqual(daily_df.loc[0, "open"], 10.5)
+        self.assertEqual(payload["candidate_count"], 1)
+        self.assertIn("daily_history", captured["context"]["dsa"]["capabilities"])
+        self.assertIs(captured["context"]["dsa"]["get_daily_history"], dsa_history_mock)
+        dsa_history_mock.assert_called_once_with("600519", lookback_days=20)
+        original_daily_fetch.assert_not_called()
+        self.assertIs(daily_module.fetch_daily_history, original_daily_fetch)
 
     def test_screen_enriches_top_candidates_with_dsa_context(self) -> None:
         config = self._config(enabled=True)
