@@ -41,6 +41,7 @@ class BacktestRepository:
         code: Optional[str],
         min_age_days: int,
         limit: int,
+        offset: int = 0,
         eval_window_days: int,
         engine_version: str,
         force: bool,
@@ -70,7 +71,7 @@ class BacktestRepository:
                 )
                 query = query.where(AnalysisHistory.id.not_in(existing_ids))
 
-            query = query.order_by(desc(AnalysisHistory.created_at)).limit(limit)
+            query = query.order_by(desc(AnalysisHistory.created_at)).offset(offset).limit(limit)
             rows = session.execute(query).scalars().all()
             return list(rows)
 

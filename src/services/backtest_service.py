@@ -66,24 +66,16 @@ class BacktestService:
         )
 
         limit_int = int(limit)
-        has_analysis_date_filter = analysis_date_from is not None or analysis_date_to is not None
-        candidate_query_limit = min(max(limit_int * 5, limit_int), 10000) if has_analysis_date_filter else limit_int
-
-        candidates = self.repo.get_candidates(
+        candidates = self._get_run_candidates(
             code=normalized_code,
             min_age_days=int(min_age_days),
-            limit=candidate_query_limit,
+            limit=limit_int,
             eval_window_days=int(eval_window_days),
             engine_version=str(engine_version),
             force=force,
-        )
-        candidates = self._filter_candidates_by_analysis_date(
-            candidates,
             analysis_date_from=analysis_date_from,
             analysis_date_to=analysis_date_to,
         )
-        if has_analysis_date_filter:
-            candidates = candidates[:limit_int]
 
         processed = 0
         completed = 0
@@ -250,6 +242,61 @@ class BacktestService:
             "message": diagnostics.get("message"),
             "diagnostics": diagnostics,
         }
+
+    def _get_run_candidates(
+        self,
+        *,
+        code: Optional[str],
+        min_age_days: int,
+        limit: int,
+        eval_window_days: int,
+        engine_version: str,
+        force: bool,
+        analysis_date_from: Optional[date],
+        analysis_date_to: Optional[date],
+    ) -> List[Any]:
+        if limit <= 0:
+            return []
+
+        if analysis_date_from is None and analysis_date_to is None:
+            return self.repo.get_candidates(
+                code=code,
+                min_age_days=min_age_days,
+                limit=limit,
+                eval_window_days=eval_window_days,
+                engine_version=engine_version,
+                force=force,
+            )
+
+        matched: List[Any] = []
+        offset = 0
+        page_size = min(max(limit, 200), 1000)
+
+        while len(matched) < limit:
+            batch = self.repo.get_candidates(
+                code=code,
+                min_age_days=min_age_days,
+                limit=page_size,
+                offset=offset,
+                eval_window_days=eval_window_days,
+                engine_version=engine_version,
+                force=force,
+            )
+            if not batch:
+                break
+
+            matched.extend(
+                self._filter_candidates_by_analysis_date(
+                    batch,
+                    analysis_date_from=analysis_date_from,
+                    analysis_date_to=analysis_date_to,
+                )
+            )
+            offset += len(batch)
+            if len(batch) < page_size:
+                break
+
+        return matched[:limit]
 
     def _filter_candidates_by_analysis_date(
         self,

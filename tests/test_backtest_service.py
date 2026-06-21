@@ -262,6 +262,46 @@ class BacktestServiceTestCase(unittest.TestCase):
             result = session.query(BacktestResult).filter(BacktestResult.code == "000003").one()
             self.assertEqual(result.analysis_date, date(2024, 1, 1))
 
+    def test_run_backtest_pages_candidates_before_analysis_date_filter(self) -> None:
+        with self.db.get_session() as session:
+            for index in range(5):
+                session.add(
+                    AnalysisHistory(
+                        query_id=f"q-newer-outside-date-{index}",
+                        code=f"00010{index}",
+                        name="测试股票",
+                        report_type="simple",
+                        sentiment_score=50,
+                        operation_advice="持有",
+                        trend_prediction="震荡",
+                        analysis_summary="newer created_at but outside analysis date range",
+                        stop_loss=None,
+                        take_profit=None,
+                        created_at=datetime(2024, 2, 10, index, 0, 0),
+                        context_snapshot=json.dumps({"enhanced_context": {"date": "2024-02-01"}}),
+                    )
+                )
+            session.commit()
+
+        service = BacktestService(self.db)
+        stats = service.run_backtest(
+            code=None,
+            force=False,
+            eval_window_days=3,
+            min_age_days=0,
+            analysis_date_from=date(2024, 1, 1),
+            analysis_date_to=date(2024, 1, 1),
+            limit=1,
+        )
+
+        self.assertEqual(stats["processed"], 1)
+        self.assertEqual(stats["completed"], 1)
+        self.assertIsNone(stats["message"])
+        with self.db.get_session() as session:
+            result = session.query(BacktestResult).one()
+            self.assertEqual(result.code, "600519")
+            self.assertEqual(result.analysis_date, date(2024, 1, 1))
+
     def test_run_backtest_reports_no_matching_candidates(self) -> None:
         service = BacktestService(self.db)
 
