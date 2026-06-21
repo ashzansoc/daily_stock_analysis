@@ -21,7 +21,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [修复] Web/API runtime scheduler 接管 `--serve --schedule` 后保留 `--dry-run`、`--no-notify` 等启动参数语义。
 - [改进] Web 历史报告详情不再内嵌展示 AI 建议卡片，结构化决策信号集中在 AI 建议页查询，并保留按来源报告 ID 筛选或 URL 参数精确定位入口。
 - [修复] 修复 Web 回测运行未传分析日期范围、股票代码未归一化导致后端成功返回但结果为空的问题，并为空候选和行情不足返回诊断信息。
-- [chore] PR #1734 回测修复的实际变更范围已同步为 11 个文件（补充 `src/repositories/backtest_repo.py`），并要求在 PR 描述中补充 Web 界面可视化验收材料或替代证据，确保与实际 diff 一致。
 
 ## [3.23.0] - 2026-06-20
 
