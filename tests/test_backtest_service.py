@@ -388,6 +388,75 @@ class BacktestServiceTestCase(unittest.TestCase):
             result = session.query(BacktestResult).filter(BacktestResult.code == "000003").one()
             self.assertEqual(result.analysis_date, date(2024, 1, 1))
 
+    def test_run_backtest_persists_snapshot_date_when_start_daily_falls_back(self) -> None:
+        with self.db.get_session() as session:
+            session.add(
+                AnalysisHistory(
+                    query_id="q-non-trading-analysis-date",
+                    code="000004",
+                    name="测试股票",
+                    report_type="simple",
+                    sentiment_score=60,
+                    operation_advice="买入",
+                    trend_prediction="看多",
+                    analysis_summary="snapshot date is a non-trading day",
+                    stop_loss=None,
+                    take_profit=None,
+                    created_at=datetime(2024, 1, 7, 0, 0, 0),
+                    context_snapshot='{"enhanced_context": {"date": "2024-01-07"}}',
+                )
+            )
+            session.add(
+                StockDaily(code="000004", date=date(2024, 1, 5), open=10.0, high=10.0, low=10.0, close=10.0)
+            )
+            session.add(
+                StockDaily(code="000004", date=date(2024, 1, 8), open=10.0, high=10.7, low=9.8, close=10.5)
+            )
+            session.commit()
+
+        service = BacktestService(self.db)
+        stats = service.run_backtest(
+            code="000004",
+            force=False,
+            eval_window_days=1,
+            min_age_days=0,
+            analysis_date_from=date(2024, 1, 7),
+            analysis_date_to=date(2024, 1, 7),
+            limit=10,
+        )
+
+        self.assertEqual(stats["processed"], 1)
+        self.assertEqual(stats["saved"], 1)
+        self.assertEqual(stats["completed"], 1)
+        with self.db.get_session() as session:
+            result = session.query(BacktestResult).filter(BacktestResult.code == "000004").one()
+            self.assertEqual(result.analysis_date, date(2024, 1, 7))
+            self.assertAlmostEqual(result.start_price, 10.0)
+            self.assertAlmostEqual(result.end_close, 10.5)
+
+        data = service.get_recent_evaluations(
+            code="000004",
+            eval_window_days=1,
+            limit=10,
+            page=1,
+            analysis_date_from=date(2024, 1, 7),
+            analysis_date_to=date(2024, 1, 7),
+        )
+        self.assertEqual(data["total"], 1)
+        self.assertEqual(data["items"][0]["analysis_date"], "2024-01-07")
+
+        summary = service.get_summary(
+            scope="stock",
+            code="000004",
+            eval_window_days=1,
+            analysis_date_from=date(2024, 1, 7),
+            analysis_date_to=date(2024, 1, 7),
+        )
+        self.assertIsNotNone(summary)
+        assert summary is not None
+        self.assertEqual(summary["total_evaluations"], 1)
+        self.assertEqual(summary["completed_count"], 1)
+
     def test_run_backtest_pages_candidates_before_analysis_date_filter(self) -> None:
         with self.db.get_session() as session:
             for index in range(5):

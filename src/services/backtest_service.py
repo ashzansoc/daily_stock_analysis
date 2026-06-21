@@ -166,7 +166,7 @@ class BacktestService:
                     BacktestResult(
                         analysis_history_id=analysis.id,
                         code=analysis.code,
-                        analysis_date=evaluation.get("analysis_date"),
+                        analysis_date=analysis_date,
                         eval_window_days=int(evaluation.get("eval_window_days") or eval_window_days),
                         engine_version=str(evaluation.get("engine_version") or engine_version),
                         eval_status=str(evaluation.get("eval_status") or "error"),
