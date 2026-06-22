@@ -484,11 +484,16 @@ jobs:
           python scripts/run_paper_trader.py || echo "Paper trader completed with warnings"
 
       - name: 同步结果到 Web UI VM
-        if: success() && secrets.VM_SSH_KEY != ''
+        if: success()
         env:
           VM_SSH_KEY: ${{ secrets.VM_SSH_KEY }}
           VM_HOST: ${{ secrets.VM_HOST }}
         run: |
+          if [ -z "$VM_SSH_KEY" ] || [ -z "$VM_HOST" ]; then
+            echo "⚠️ VM sync skipped (VM_SSH_KEY or VM_HOST not configured)"
+            exit 0
+          fi
+
           mkdir -p ~/.ssh
           echo "$VM_SSH_KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
