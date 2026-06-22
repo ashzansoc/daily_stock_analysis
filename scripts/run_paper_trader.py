@@ -125,19 +125,50 @@ def run_paper_trading():
             for msg in exit_msgs:
                 logger.info(f"Exit triggered: {msg[:100]}...")
 
-    # Step 2: Get latest analyses and evaluate new trades
+    # Step 2: Get latest analyses and evaluate new trades (with live price check)
     analyses = get_latest_analyses()
     logger.info(f"Found {len(analyses)} recent analyses to evaluate")
+
+    # Fetch live prices for all watchlist stocks
+    all_codes = [a["code"] for a in analyses]
+    live_prices = get_current_prices(all_codes)
+    logger.info(f"Got live prices for {len(live_prices)} stocks")
 
     for analysis in analyses:
         code = analysis["code"]
         score = analysis.get("sentiment_score", 0)
         advice = analysis.get("operation_advice", "")
-        logger.info(f"Evaluating {code}: score={score}, advice='{advice}'")
+        ideal_buy = analysis.get("ideal_buy")
+        secondary_buy = analysis.get("secondary_buy")
+        current_price = live_prices.get(code)
 
-        result = engine.evaluate_and_trade(analysis)
-        if result:
-            logger.info(f"Trade executed for {code}")
+        # Add live price to analysis for the engine to use
+        if current_price:
+            analysis["current_price"] = current_price
+
+        # Check if live price has reached entry levels
+        price_at_entry = False
+        if current_price and ideal_buy and current_price <= ideal_buy:
+            price_at_entry = True
+            logger.info(f"[{code}] Price ${current_price:.2f} reached ideal entry ${ideal_buy:.2f}")
+        elif current_price and secondary_buy and current_price <= secondary_buy:
+            price_at_entry = True
+            logger.info(f"[{code}] Price ${current_price:.2f} reached secondary entry ${secondary_buy:.2f}")
+
+        if price_at_entry:
+            logger.info(f"Evaluating {code}: score={score}, advice='{advice}', price=${current_price:.2f}")
+            result = engine.evaluate_and_trade(analysis)
+            if result:
+                logger.info(f"Trade executed for {code}")
+        else:
+            # Still evaluate if analysis explicitly says buy (score >= 60 + buy signal)
+            if score and score >= 60:
+                logger.info(f"Evaluating {code} (high score): score={score}, advice='{advice}'")
+                result = engine.evaluate_and_trade(analysis)
+                if result:
+                    logger.info(f"Trade executed for {code}")
+            else:
+                logger.debug(f"Skipping {code}: score={score}, price not at entry level")
 
     # Step 3: Send daily summary
     engine.send_daily_summary()
