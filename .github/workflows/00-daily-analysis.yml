@@ -514,6 +514,7 @@ jobs:
             reports/
             logs/
             data/paper_portfolio.json
+            data/stock_analysis.db
           retention-days: 30
       
       - name: 显示运行结果
