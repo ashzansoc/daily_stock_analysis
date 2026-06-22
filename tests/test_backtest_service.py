@@ -15,6 +15,7 @@ from unittest.mock import patch
 
 from src.config import Config
 from src.core.backtest_engine import OVERALL_SENTINEL_CODE
+from src.repositories.backtest_repo import BacktestRepository
 from src.services.backtest_service import BacktestService
 from src.storage import AnalysisHistory, BacktestResult, BacktestSummary, DatabaseManager, StockDaily
 
@@ -264,6 +265,175 @@ class BacktestServiceTestCase(unittest.TestCase):
         summary = service.get_summary(scope="stock", code="600519.SH", eval_window_days=3)
         self.assertIsNotNone(summary)
         self.assertEqual(summary["code"], "600519")
+
+    def test_run_backtest_matches_compact_prefixed_analysis_history_with_canonical_query(self) -> None:
+        with self.db.get_session() as session:
+            session.add(
+                AnalysisHistory(
+                    query_id="q_compact_history_sh",
+                    code="SH600519",
+                    name="贵州茅台",
+                    report_type="simple",
+                    sentiment_score=60,
+                    operation_advice="买入",
+                    trend_prediction="看多",
+                    analysis_summary="compact history code with canonical query",
+                    stop_loss=None,
+                    take_profit=None,
+                    created_at=datetime(2024, 2, 15, 0, 0, 0),
+                    context_snapshot='{"enhanced_context": {"date": "2024-02-15"}}',
+                )
+            )
+            session.add(
+                StockDaily(
+                    code="SH600519",
+                    date=date(2024, 2, 15),
+                    open=100.0,
+                    high=100.0,
+                    low=100.0,
+                    close=100.0,
+                )
+            )
+            session.add_all(
+                [
+                    StockDaily(code="SH600519", date=date(2024, 2, 16), high=102.0, low=99.0, close=101.0),
+                    StockDaily(code="SH600519", date=date(2024, 2, 17), high=104.0, low=100.0, close=103.0),
+                ]
+            )
+            session.commit()
+
+        service = BacktestService(self.db)
+        stats = service.run_backtest(
+            code="600519",
+            force=False,
+            eval_window_days=2,
+            min_age_days=0,
+            analysis_date_from=date(2024, 2, 15),
+            analysis_date_to=date(2024, 2, 15),
+            limit=10,
+        )
+
+        self.assertEqual(stats["processed"], 1)
+        self.assertEqual(stats["saved"], 1)
+        self.assertEqual(stats["completed"], 1)
+
+        data = service.get_recent_evaluations(code="SH600519", eval_window_days=2, limit=10, page=1)
+        self.assertEqual(data["total"], 1)
+
+    def test_run_backtest_uses_compact_forward_bars_when_analysis_history_is_bare_code(self) -> None:
+        with self.db.get_session() as session:
+            session.add(
+                AnalysisHistory(
+                    query_id="q_compact_forward_sh",
+                    code="600519",
+                    name="贵州茅台",
+                    report_type="simple",
+                    sentiment_score=60,
+                    operation_advice="买入",
+                    trend_prediction="看多",
+                    analysis_summary="bare history with compact forward bars",
+                    stop_loss=None,
+                    take_profit=None,
+                    created_at=datetime(2024, 3, 1, 0, 0, 0),
+                    context_snapshot='{"enhanced_context": {"date": "2024-03-01"}}',
+                )
+            )
+            session.add(
+                StockDaily(
+                    code="SH600519",
+                    date=date(2024, 3, 1),
+                    open=110.0,
+                    high=110.0,
+                    low=110.0,
+                    close=110.0,
+                )
+            )
+            session.add_all(
+                [
+                    StockDaily(code="SH600519", date=date(2024, 3, 2), high=112.0, low=109.0, close=111.0),
+                    StockDaily(code="SH600519", date=date(2024, 3, 3), high=113.0, low=110.0, close=112.0),
+                ]
+            )
+            session.commit()
+
+        service = BacktestService(self.db)
+        stats = service.run_backtest(
+            code="600519",
+            force=False,
+            eval_window_days=2,
+            min_age_days=0,
+            analysis_date_from=date(2024, 3, 1),
+            analysis_date_to=date(2024, 3, 1),
+            limit=10,
+        )
+
+        self.assertEqual(stats["processed"], 1)
+        self.assertEqual(stats["saved"], 1)
+        self.assertEqual(stats["completed"], 1)
+        self.assertEqual(stats["insufficient"], 0)
+
+    def test_run_backtest_matches_compact_bj_code_shape_with_no_prefix_query(self) -> None:
+        with self.db.get_session() as session:
+            session.add(
+                AnalysisHistory(
+                    query_id="q_compact_history_bj",
+                    code="BJ920748",
+                    name="可转债",
+                    report_type="simple",
+                    sentiment_score=60,
+                    operation_advice="买入",
+                    trend_prediction="看多",
+                    analysis_summary="BJ compact history code without query prefix",
+                    stop_loss=None,
+                    take_profit=None,
+                    created_at=datetime(2024, 4, 1, 0, 0, 0),
+                    context_snapshot='{"enhanced_context": {"date": "2024-04-01"}}',
+                )
+            )
+            session.add(
+                StockDaily(
+                    code="BJ920748",
+                    date=date(2024, 4, 1),
+                    open=200.0,
+                    high=200.0,
+                    low=200.0,
+                    close=200.0,
+                )
+            )
+            session.add_all(
+                [
+                    StockDaily(code="BJ920748", date=date(2024, 4, 2), high=210.0, low=198.0, close=205.0),
+                    StockDaily(code="BJ920748", date=date(2024, 4, 3), high=215.0, low=202.0, close=210.0),
+                ]
+            )
+            session.commit()
+
+        service = BacktestService(self.db)
+        stats = service.run_backtest(
+            code="920748",
+            force=False,
+            eval_window_days=2,
+            min_age_days=0,
+            analysis_date_from=date(2024, 4, 1),
+            analysis_date_to=date(2024, 4, 1),
+            limit=10,
+        )
+
+        self.assertEqual(stats["processed"], 1)
+        self.assertEqual(stats["saved"], 1)
+        self.assertEqual(stats["completed"], 1)
+
+        data = service.get_recent_evaluations(code="BJ920748", eval_window_days=2, limit=10, page=1)
+        self.assertEqual(data["total"], 1)
+
+    def test_build_market_code_variants_includes_compact_prefix_and_bj_forms(self) -> None:
+        sh_variants = BacktestRepository._build_market_code_variants("600519", "600519")
+        self.assertIn("SH600519", sh_variants)
+        self.assertIn("SH.600519", sh_variants)
+
+        bj_variants = BacktestRepository._build_market_code_variants("920748", "920748")
+        self.assertIn("BJ920748", bj_variants)
+        self.assertIn("920748.BJ", bj_variants)
 
     def test_run_backtest_bare_code_query_matches_dotted_history_records(self) -> None:
         self._seed_analysis(
