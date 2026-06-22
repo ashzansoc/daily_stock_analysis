@@ -519,6 +519,7 @@ class BacktestRepository:
             variants.append(f"{normalized_upper}.{exchange}")
             variants.append(f"{exchange}.{normalized_upper}")
             if exchange == "SH":
+                variants.append(f"SS{normalized_upper}")
                 variants.append(f"{normalized_upper}.SS")
                 variants.append(f"SS.{normalized_upper}")
 

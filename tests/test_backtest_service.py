@@ -320,6 +320,40 @@ class BacktestServiceTestCase(unittest.TestCase):
         data = service.get_recent_evaluations(code="SH600519", eval_window_days=2, limit=10, page=1)
         self.assertEqual(data["total"], 1)
 
+    def test_run_backtest_matches_compact_ss_alias_after_request_normalization(self) -> None:
+        self._seed_analysis(
+            query_id="q_compact_history_ss",
+            code="SS600519",
+            analysis_date=date(2024, 2, 20),
+            created_at=datetime(2024, 2, 20, 0, 0, 0),
+            operation_advice="买入",
+            trend_prediction="看多",
+            start_close=100.0,
+            forward_bars=[
+                StockDaily(code="SS600519", date=date(2024, 2, 21), high=102.0, low=99.0, close=101.0),
+                StockDaily(code="SS600519", date=date(2024, 2, 22), high=104.0, low=100.0, close=103.0),
+            ],
+        )
+
+        service = BacktestService(self.db)
+        stats = service.run_backtest(
+            code="SS600519",
+            force=False,
+            eval_window_days=2,
+            min_age_days=0,
+            analysis_date_from=date(2024, 2, 20),
+            analysis_date_to=date(2024, 2, 20),
+            limit=10,
+        )
+
+        self.assertEqual(stats["processed"], 1)
+        self.assertEqual(stats["saved"], 1)
+        self.assertEqual(stats["completed"], 1)
+
+        data = service.get_recent_evaluations(code="SS600519", eval_window_days=2, limit=10, page=1)
+        self.assertEqual(data["total"], 1)
+        self.assertEqual(data["items"][0]["code"], "SS600519")
+
     def test_run_backtest_uses_compact_forward_bars_when_analysis_history_is_bare_code(self) -> None:
         with self.db.get_session() as session:
             session.add(
@@ -430,6 +464,7 @@ class BacktestServiceTestCase(unittest.TestCase):
         sh_variants = BacktestRepository._build_market_code_variants("600519", "600519")
         self.assertIn("SH600519", sh_variants)
         self.assertIn("SH.600519", sh_variants)
+        self.assertIn("SS600519", sh_variants)
 
         bj_variants = BacktestRepository._build_market_code_variants("920748", "920748")
         self.assertIn("BJ920748", bj_variants)
