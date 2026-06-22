@@ -483,6 +483,23 @@ jobs:
           echo "🤖 Running Paper Trading Engine..."
           python scripts/run_paper_trader.py || echo "Paper trader completed with warnings"
 
+      - name: 同步结果到 Web UI VM
+        if: success() && secrets.VM_SSH_KEY != ''
+        env:
+          VM_SSH_KEY: ${{ secrets.VM_SSH_KEY }}
+          VM_HOST: ${{ secrets.VM_HOST }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$VM_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          echo "StrictHostKeyChecking no" > ~/.ssh/config
+
+          echo "📤 Syncing database and reports to VM..."
+          scp -i ~/.ssh/deploy_key data/stock_analysis.db root@$VM_HOST:/opt/daily_stock_analysis/data/stock_analysis.db || echo "DB sync failed"
+          scp -i ~/.ssh/deploy_key reports/*.md root@$VM_HOST:/opt/daily_stock_analysis/reports/ 2>/dev/null || echo "Reports sync skipped"
+          scp -i ~/.ssh/deploy_key data/paper_portfolio.json root@$VM_HOST:/opt/daily_stock_analysis/data/paper_portfolio.json 2>/dev/null || echo "Portfolio sync skipped"
+          echo "✅ Sync complete"
+
       - name: 上传分析报告
         uses: actions/upload-artifact@v6
         if: always()
