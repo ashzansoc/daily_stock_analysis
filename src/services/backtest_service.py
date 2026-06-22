@@ -145,23 +145,31 @@ class BacktestService:
                 matched_daily_code = start_daily.code or (
                     daily_code_candidates[0] if daily_code_candidates else analysis.code
                 )
-                forward_bars = self.stock_repo.get_forward_bars(
-                    code=matched_daily_code,
+                forward_bars = self._get_forward_bars_by_candidates(
+                    code_candidates=daily_code_candidates,
                     analysis_date=start_daily.date,
                     eval_window_days=int(eval_window_days),
+                    preferred_code=matched_daily_code,
                 )
 
                 if len(forward_bars) < int(eval_window_days):
-                    self._try_fill_daily_data(
-                        code=matched_daily_code,
-                        analysis_date=start_daily.date,
-                        eval_window_days=eval_window_days,
-                    )
-                    forward_bars = self.stock_repo.get_forward_bars(
-                        code=matched_daily_code,
-                        analysis_date=start_daily.date,
-                        eval_window_days=int(eval_window_days),
-                    )
+                    for fill_code in self._ordered_candidate_codes(
+                        code_candidates=daily_code_candidates,
+                        preferred_code=matched_daily_code,
+                    ):
+                        self._try_fill_daily_data(
+                            code=fill_code,
+                            analysis_date=start_daily.date,
+                            eval_window_days=eval_window_days,
+                        )
+                        forward_bars = self._get_forward_bars_by_candidates(
+                            code_candidates=daily_code_candidates,
+                            analysis_date=start_daily.date,
+                            eval_window_days=int(eval_window_days),
+                            preferred_code=matched_daily_code,
+                        )
+                        if len(forward_bars) >= int(eval_window_days):
+                            break
 
                 evaluation = BacktestEngine.evaluate_single(
                     operation_advice=analysis.operation_advice,
@@ -440,6 +448,56 @@ class BacktestService:
 
         normalized = normalize_stock_code(str(code).strip())
         return normalized or canonical_stock_code(code)
+
+    @staticmethod
+    def _ordered_candidate_codes(
+        *,
+        code_candidates: List[str],
+        preferred_code: Optional[str] = None,
+    ) -> List[str]:
+        ordered = list(dict.fromkeys(code_candidates))
+        if not ordered:
+            return []
+
+        if not preferred_code:
+            return ordered
+
+        normalized_preferred = preferred_code.strip()
+        if normalized_preferred and normalized_preferred in ordered:
+            return [normalized_preferred] + [code for code in ordered if code != normalized_preferred]
+        return ordered
+
+    def _get_forward_bars_by_candidates(
+        self,
+        *,
+        code_candidates: List[str],
+        analysis_date: date,
+        eval_window_days: int,
+        preferred_code: Optional[str] = None,
+    ) -> List[Any]:
+        ordered_codes = BacktestService._ordered_candidate_codes(
+            code_candidates=code_candidates,
+            preferred_code=preferred_code,
+        )
+
+        if not ordered_codes:
+            return []
+
+        best_bars: List[Any] = []
+        for code in ordered_codes:
+            if not code:
+                continue
+
+            bars = self.stock_repo.get_forward_bars(
+                code=code,
+                analysis_date=analysis_date,
+                eval_window_days=eval_window_days,
+            )
+            if len(bars) >= eval_window_days:
+                return bars
+            if len(bars) > len(best_bars):
+                best_bars = bars
+        return best_bars
 
     @staticmethod
     def _build_run_diagnostics(
