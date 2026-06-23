@@ -139,8 +139,8 @@ class PaperTradingEngine:
     # Trading rules
     MAX_POSITION_PCT = 0.20      # Max 20% of portfolio per trade
     MAX_OPEN_POSITIONS = 5       # Max 5 concurrent positions
-    MIN_SCORE_TO_BUY = 60        # Minimum sentiment score to consider buying
-    MIN_RISK_REWARD = 2.0        # Minimum risk/reward ratio
+    MIN_SCORE_TO_BUY = 55        # Minimum sentiment score to consider buying
+    MIN_RISK_REWARD = 1.5        # Minimum risk/reward ratio
     MAX_BIAS_PCT = 5.0           # Max acceptable bias from MA5
 
     def __init__(
@@ -231,21 +231,34 @@ class PaperTradingEngine:
         else:
             conditions_failed.append(f"Score {score} < {self.MIN_SCORE_TO_BUY}")
 
-        # Condition 2: Operation advice suggests buying
+        # Condition 2: Operation advice suggests buying (or neutral with good score at entry)
         buy_keywords = ["buy", "enter", "accumulate", "加仓", "买入", "建仓"]
+        hold_keywords = ["hold", "watch", "wait", "持有", "观望", "持有"]
         is_buy_signal = any(kw in (operation or "").lower() for kw in buy_keywords)
+        is_hold_signal = any(kw in (operation or "").lower() for kw in hold_keywords)
+
+        # Accept hold/watch as a soft buy signal if score >= 55 (loosened rule)
         if is_buy_signal:
             conditions_met.append(f"Buy signal: '{operation}'")
+        elif is_hold_signal and score and score >= self.MIN_SCORE_TO_BUY:
+            conditions_met.append(f"Hold at good score ({score}): '{operation}'")
         else:
             conditions_failed.append(f"No buy signal: '{operation}'")
 
-        # Condition 3: Trend is bullish or recovering
+        # Condition 3: Trend is bullish, recovering, or neutral (not strongly bearish)
         bullish_keywords = ["bullish", "recovering", "uptrend", "看多", "多头"]
+        neutral_keywords = ["oscillat", "neutral", "sideways", "consolidat", "震荡"]
+        bearish_block_keywords = ["strongly bearish", "strong bearish"]
         is_bullish = any(kw in (trend or "").lower() for kw in bullish_keywords)
+        is_neutral = any(kw in (trend or "").lower() for kw in neutral_keywords)
+        is_strongly_bearish = any(kw in (trend or "").lower() for kw in bearish_block_keywords)
+
         if is_bullish:
             conditions_met.append(f"Bullish trend: '{trend}'")
+        elif is_neutral and not is_strongly_bearish:
+            conditions_met.append(f"Neutral trend (acceptable): '{trend}'")
         else:
-            conditions_failed.append(f"Not bullish: '{trend}'")
+            conditions_failed.append(f"Bearish trend: '{trend}'")
 
         # Condition 4: Entry levels are defined
         if ideal_buy and stop_loss and take_profit:
