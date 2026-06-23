@@ -139,8 +139,9 @@ class PaperTradingEngine:
     # Trading rules
     MAX_POSITION_PCT = 0.20      # Max 20% of portfolio per trade
     MAX_OPEN_POSITIONS = 5       # Max 5 concurrent positions
-    MIN_SCORE_TO_BUY = 55        # Minimum sentiment score to consider buying
+    MIN_SCORE_TO_BUY = 58        # Minimum sentiment score to consider buying
     MIN_RISK_REWARD = 1.5        # Minimum risk/reward ratio
+    MIN_STOP_DISTANCE_PCT = 2.0  # Stop loss must be at least 2% below entry
     MAX_BIAS_PCT = 5.0           # Max acceptable bias from MA5
 
     def __init__(
@@ -266,28 +267,40 @@ class PaperTradingEngine:
         else:
             conditions_failed.append("Missing entry/SL/TP levels")
 
-        # Condition 5: Risk/reward ratio >= 2
+        # Condition 5: Risk/reward ratio >= 1.5 AND stop loss at least 2% below entry
         rr_ratio = 0.0
         entry_price = ideal_buy or secondary_buy
         if entry_price and stop_loss and take_profit and entry_price > stop_loss:
             risk = entry_price - stop_loss
             reward = take_profit - entry_price
             rr_ratio = reward / risk if risk > 0 else 0
-            if rr_ratio >= self.MIN_RISK_REWARD:
-                conditions_met.append(f"R:R = {rr_ratio:.1f} >= {self.MIN_RISK_REWARD}")
+            stop_distance_pct = (risk / entry_price) * 100
+
+            if stop_distance_pct < self.MIN_STOP_DISTANCE_PCT:
+                conditions_failed.append(f"Stop too tight: {stop_distance_pct:.1f}% < {self.MIN_STOP_DISTANCE_PCT}%")
+            elif rr_ratio >= self.MIN_RISK_REWARD:
+                conditions_met.append(f"R:R = {rr_ratio:.1f} >= {self.MIN_RISK_REWARD}, SL distance {stop_distance_pct:.1f}%")
             else:
                 conditions_failed.append(f"R:R = {rr_ratio:.1f} < {self.MIN_RISK_REWARD}")
         else:
             conditions_failed.append("Cannot calculate R:R")
 
-        # Condition 6: Not already holding this stock
+        # Condition 6: Not already holding this stock AND not recently stopped out
         already_holding = any(
             p.stock_code == code for p in self.portfolio.open_positions
         )
-        if not already_holding:
-            conditions_met.append("Not already holding")
-        else:
+        # Prevent whipsaw: don't re-buy a stock that was stopped out in the last 24 hours
+        recently_stopped = any(
+            t.stock_code == code and t.status == "closed_loss"
+            and t.exit_date and (datetime.now() - datetime.strptime(t.exit_date, "%Y-%m-%d %H:%M")).total_seconds() < 86400
+            for t in self.portfolio.closed_trades[-20:]  # Check last 20 trades
+        )
+        if already_holding:
             conditions_failed.append("Already holding this stock")
+        elif recently_stopped:
+            conditions_failed.append(f"Recently stopped out (24h cooldown)")
+        else:
+            conditions_met.append("Not already holding")
 
         # Condition 7: Portfolio capacity (max positions)
         if len(self.portfolio.open_positions) < self.MAX_OPEN_POSITIONS:
