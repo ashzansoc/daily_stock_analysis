@@ -134,6 +134,42 @@ def run_paper_trading():
     live_prices = get_current_prices(all_codes)
     logger.info(f"Got live prices for {len(live_prices)} stocks")
 
+    # Send 10-min heartbeat to Telegram
+    if engine.telegram and live_prices:
+        from datetime import datetime
+        now = datetime.utcnow()
+        # Count stocks at entry, near entry, and far from entry
+        at_entry = []
+        near_entry = []
+        for a in analyses:
+            code = a["code"]
+            price = live_prices.get(code)
+            ideal = a.get("ideal_buy")
+            if price and ideal and ideal > 0:
+                diff_pct = ((price - ideal) / ideal) * 100
+                if diff_pct <= 0:
+                    at_entry.append(f"{code} ${price:.2f} (at entry)")
+                elif diff_pct <= 2:
+                    near_entry.append(f"{code} ${price:.2f} ({diff_pct:.1f}% above)")
+
+        positions_info = f"Open: {len(engine.portfolio.open_positions)}/5"
+        cash_info = f"Cash: ${engine.portfolio.cash:,.0f}"
+
+        heartbeat = (
+            f"📡 Price Check | {now.strftime('%H:%M')} UTC\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"📊 Fetched {len(live_prices)}/30 stocks\n"
+            f"💼 {positions_info} | {cash_info}\n"
+        )
+        if at_entry:
+            heartbeat += f"\n🎯 AT ENTRY LEVEL:\n" + "\n".join(f"  • {s}" for s in at_entry) + "\n"
+        if near_entry:
+            heartbeat += f"\n👀 Near entry (<2%):\n" + "\n".join(f"  • {s}" for s in near_entry) + "\n"
+        if not at_entry and not near_entry:
+            heartbeat += f"\n⏳ No stocks at entry levels yet\n"
+
+        engine.telegram.send(heartbeat)
+
     for analysis in analyses:
         code = analysis["code"]
         score = analysis.get("sentiment_score", 0)
@@ -169,9 +205,6 @@ def run_paper_trading():
                     logger.info(f"Trade executed for {code}")
             else:
                 logger.debug(f"Skipping {code}: score={score}, price not at entry level")
-
-    # Step 3: Send daily summary
-    engine.send_daily_summary()
 
     logger.info("Paper Trading Engine - Complete")
     return engine
